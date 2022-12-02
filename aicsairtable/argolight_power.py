@@ -3,6 +3,10 @@ import math
 import os
 import warnings
 
+from aics_airtable_core import (
+    upload_pandas_dataframe,
+)
+from dotenv import load_dotenv
 import pandas as pd
 import scipy.stats
 
@@ -138,14 +142,14 @@ class ArgoPowerMetrics:
 
     @staticmethod
     def build_laser_dashboard(dashboard, linearity, experimental):
-        linearity["System"] = linearity.System.astype("category")
-        linearity["Wavelength"] = linearity.Wavelength.astype("category")
+        linearity["System"] = linearity["System"].astype("category")
+        linearity["Wavelength (nm)"] = linearity["Wavelength (nm)"].astype("category")
         systems = linearity["System"].cat.categories
         for system in systems:
             pd_sys = linearity[linearity["System"] == system]
-            Wavelengths = pd_sys["Wavelength"].cat.categories
+            Wavelengths = pd_sys["Wavelength (nm)"].cat.categories
             for wavelength in Wavelengths:
-                pd_wavelength = pd_sys[pd_sys["Wavelength"] == wavelength]
+                pd_wavelength = pd_sys[pd_sys["Wavelength (nm)"] == wavelength]
                 if not pd_wavelength.empty:
                     pd_current = pd_wavelength[
                         pd_wavelength["Date"] == pd_wavelength["Date"].max()
@@ -155,26 +159,26 @@ class ArgoPowerMetrics:
                     row_data.append(pd_current["Date"].max())  # Max Date
                     row_data.append(wavelength)
                     row_data.append(
-                        pd_current["Power_in_uW"].max()
+                        pd_current["Power (uW)"].max()
                     )  # power in MW of 100% at current date
 
                     experimental_single_system = experimental[
                         experimental["System"] == system
                     ]
                     experimental_single_system = experimental_single_system[
-                        experimental_single_system["Wavelength"] == wavelength
+                        experimental_single_system["Wavelength (nm)"] == wavelength
                     ]
                     experimental_single_system = experimental_single_system[
                         experimental_single_system["Date"] == pd_current["Date"].max()
                     ]
                     row_data.append(
-                        experimental_single_system["Power_instruction (%)"].min()
+                        experimental_single_system["Power Instruction (%)"].min()
                     )  # Threshold
 
                     row_data.append(
                         scipy.stats.linregress(
-                            x=pd_current["Power_instruction (%)"],
-                            y=pd_current["Power_in_uW"],
+                            x=pd_current["Power Instruction (%)"],
+                            y=pd_current["Power (uW)"],
                         ).rvalue
                         ** 2
                     )  # R^2 of current date
@@ -186,3 +190,49 @@ class ArgoPowerMetrics:
                     row_data = pd.Series(row_data, index=dashboard.columns)
                     dashboard = dashboard.append(row_data, ignore_index=True)
         return dashboard
+
+    def upload(self, env_vars: str):
+        try:
+            load_dotenv(env_vars)
+
+        except Exception as e:
+            raise EnvironmentError(
+                "The specified env_var is invalid and failed with " + str(e)
+            )
+
+        # Check that all variables from .env are  present
+        if (
+            any(
+                [
+                    os.getenv("AIRTABLE_API_KEY"),
+                    os.getenv("ARGOLIGHT_POWER_MONTHLY_BASE_KEY"),
+                    os.getenv("LASERPOWER_DASHBOARD_TABLE"),
+                    os.getenv("LASERPOWER_LINEARITY_TABLE"),
+                    os.getenv("LASERPOWER_EXPERIMENTAL_TABLE"),
+                ]
+            )
+            == "None"
+        ):
+            raise EnvironmentError(
+                "Environment variables were not loaded correctly. Some values may be missing."
+            )
+        upload_pandas_dataframe(
+            pandas_dataframe=self.linearity,
+            table=os.getenv("LASERPOWER_LINEARITY_TABLE"),
+            api_key=os.getenv("AIRTABLE_API_KEY"),
+            base_id=os.getenv("ARGOLIGHT_POWER_MONTHLY_BASE_KEY"),
+        )
+        upload_pandas_dataframe(
+            pandas_dataframe=self.experimental,
+            table=os.getenv("LASERPOWER_EXPERIMENTAL_TABLE"),
+            api_key=os.getenv("AIRTABLE_API_KEY"),
+            base_id=os.getenv("ARGOLIGHT_POWER_MONTHLY_BASE_KEY"),
+        )
+        upload_pandas_dataframe(
+            pandas_dataframe=self.dashboard,
+            table=os.getenv("LASERPOWER_DASHBOARD_TABLE"),
+            api_key=os.getenv("AIRTABLE_API_KEY"),
+            base_id=os.getenv("ARGOLIGHT_POWER_MONTHLY_BASE_KEY"),
+        )
+
+        # add update to most recent records
